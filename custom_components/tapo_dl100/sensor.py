@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, PERCENTAGE, EntityCategory
+from homeassistant.const import (
+    CONF_NAME,
+    PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+    EntityCategory,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -19,10 +28,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up DL100 battery sensor entity."""
+    """Set up DL100 sensor entities."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: Dl100Coordinator = data["coordinator"]
-    async_add_entities([Dl100BatterySensor(entry, coordinator)])
+    async_add_entities(
+        [
+            Dl100BatterySensor(entry, coordinator),
+            Dl100RssiSensor(entry, coordinator),
+        ]
+    )
 
 
 class Dl100BatterySensor(CoordinatorEntity[Dl100Coordinator], SensorEntity):
@@ -77,3 +91,32 @@ class Dl100BatterySensor(CoordinatorEntity[Dl100Coordinator], SensorEntity):
         if self.coordinator.api.last_success_at:
             attrs["last_success_at"] = self.coordinator.api.last_success_at
         return attrs
+
+
+class Dl100RssiSensor(CoordinatorEntity[Dl100Coordinator], SensorEntity):
+    """Signal strength (RSSI) sensor for a Tapo DL100 lock."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "rssi"
+    _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+    _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, entry: ConfigEntry, coordinator: Dl100Coordinator) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_rssi"
+        self._attr_name = f"{entry.data[CONF_NAME]} Signal"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success and (
+            self.coordinator.data is not None and self.coordinator.data.rssi is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.rssi

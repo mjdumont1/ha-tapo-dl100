@@ -56,6 +56,12 @@ class Dl100LockEntity(CoordinatorEntity[Dl100Coordinator], LockEntity):
         return None
 
     @property
+    def is_jammed(self) -> bool:
+        if self.coordinator.data:
+            return bool(self.coordinator.data.is_jammed)
+        return False
+
+    @property
     def available(self) -> bool:
         return self.coordinator.last_update_success
 

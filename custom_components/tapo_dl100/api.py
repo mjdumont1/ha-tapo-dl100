@@ -99,6 +99,18 @@ class DeviceInfo:
     battery_percentage: int | None
     at_low_battery: bool | None
     raw: Json
+    is_jammed: bool = False
+    rssi: int | None = None
+    auto_lock_enabled: bool | None = None
+    auto_lock_delay: int | None = None
+    speaker_enabled: bool | None = None
+    speaker_volume: int | None = None
+    doorjam_alarm_enabled: bool | None = None
+    pin_scrambling_enabled: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.lock_status in (3, 4):
+            self.is_jammed = True
 
 
 class _Session:
@@ -230,18 +242,125 @@ class DlklapApi:
             "check Home Assistant logs for the full traceback."
         )
 
+    @staticmethod
+    def _parse_batched_info(result: Json) -> DeviceInfo:
+        responses = result.get("result", {}).get("responses", [])
+        raw: Json = {}
+        lock_status = 2
+        battery_percentage = None
+        at_low_battery = None
+        rssi = None
+        auto_lock_enabled = None
+        auto_lock_delay = None
+        speaker_enabled = None
+        speaker_volume = None
+        doorjam_alarm_enabled = None
+        pin_scrambling_enabled = None
+
+        if len(responses) > 0 and responses[0].get("error_code") == 0:
+            dev_info = responses[0].get("result", {})
+            raw = dev_info
+            lock_status = dev_info.get("lock_status", 2)
+            battery_percentage = dev_info.get("battery_percentage")
+            at_low_battery = dev_info.get("at_low_battery")
+            rssi = dev_info.get("rssi")
+
+        if len(responses) > 1 and responses[1].get("error_code") == 0:
+            al_info = responses[1].get("result", {})
+            auto_lock_enabled = al_info.get("switch_auto_lock")
+            auto_lock_delay = al_info.get("auto_lock_time")
+
+        if len(responses) > 2 and responses[2].get("error_code") == 0:
+            spk_info = responses[2].get("result", {})
+            speaker_enabled = spk_info.get("switch_speaker")
+            speaker_volume = spk_info.get("volume")
+
+        if len(responses) > 3 and responses[3].get("error_code") == 0:
+            dj_info = responses[3].get("result", {})
+            doorjam_alarm_enabled = dj_info.get("switch_doorjam_alarm")
+
+        if len(responses) > 4 and responses[4].get("error_code") == 0:
+            scramble_info = responses[4].get("result", {})
+            pin_scrambling_enabled = scramble_info.get("switch_scrambling_mode")
+
+        return DeviceInfo(
+            lock_status=lock_status,
+            battery_percentage=battery_percentage,
+            at_low_battery=at_low_battery,
+            raw=raw,
+            is_jammed=lock_status in (3, 4),
+            rssi=rssi,
+            auto_lock_enabled=auto_lock_enabled,
+            auto_lock_delay=auto_lock_delay,
+            speaker_enabled=speaker_enabled,
+            speaker_volume=speaker_volume,
+            doorjam_alarm_enabled=doorjam_alarm_enabled,
+            pin_scrambling_enabled=pin_scrambling_enabled,
+        )
+
     async def get_device_info(self) -> DeviceInfo:
         async def _do_call(session: _Session) -> DeviceInfo:
-            result = await session.call([{"method": "getDeviceInfo"}])
-            info = result["result"]["responses"][0]["result"]
-            return DeviceInfo(
-                lock_status=info["lock_status"],
-                battery_percentage=info.get("battery_percentage"),
-                at_low_battery=info.get("at_low_battery"),
-                raw=info,
-            )
+            requests = [
+                {"method": "getDeviceInfo"},
+                {"method": "getAutoLockInfo"},
+                {"method": "getSpeaker"},
+                {"method": "getSwitchDoorjamAlarm"},
+                {"method": "getSwitchScrambling"},
+            ]
+            result = await session.call(requests)
+            return self._parse_batched_info(result)
 
         return await self._with_session(_do_call)
+
+    async def set_auto_lock(self, enabled: bool, delay_seconds: int | None = None) -> None:
+        """Enable or disable hardware auto-lock and optionally update the timer delay."""
+        async def _do_call(session: _Session) -> None:
+            params: Json = {"switch_auto_lock": enabled}
+            if delay_seconds is not None:
+                params["auto_lock_time"] = int(delay_seconds)
+            response = await session.call([{"method": "setAutoLockInfo", "params": params}])
+            resp = response.get("result", {}).get("responses", [{}])[0]
+            if resp.get("error_code") != 0:
+                raise DlklapError(f"setAutoLockInfo failed: {response}")
+
+        await self._with_session(_do_call)
+
+    async def set_speaker(self, enabled: bool, volume: int | None = None) -> None:
+        """Enable or disable lock audio prompts and optionally update volume level."""
+        async def _do_call(session: _Session) -> None:
+            params: Json = {"switch_speaker": enabled}
+            if volume is not None:
+                params["volume"] = int(volume)
+            response = await session.call([{"method": "setSpeaker", "params": params}])
+            resp = response.get("result", {}).get("responses", [{}])[0]
+            if resp.get("error_code") != 0:
+                raise DlklapError(f"setSpeaker failed: {response}")
+
+        await self._with_session(_do_call)
+
+    async def set_doorjam_alarm(self, enabled: bool) -> None:
+        """Enable or disable the deadbolt motor jam siren."""
+        async def _do_call(session: _Session) -> None:
+            response = await session.call(
+                [{"method": "setSwitchDoorjamAlarm", "params": {"switch_doorjam_alarm": enabled}}]
+            )
+            resp = response.get("result", {}).get("responses", [{}])[0]
+            if resp.get("error_code") != 0:
+                raise DlklapError(f"setSwitchDoorjamAlarm failed: {response}")
+
+        await self._with_session(_do_call)
+
+    async def set_pin_scrambling(self, enabled: bool) -> None:
+        """Enable or disable anti-peep keypad PIN scrambling mode."""
+        async def _do_call(session: _Session) -> None:
+            response = await session.call(
+                [{"method": "setSwitchScrambling", "params": {"switch_scrambling_mode": enabled}}]
+            )
+            resp = response.get("result", {}).get("responses", [{}])[0]
+            if resp.get("error_code") != 0:
+                raise DlklapError(f"setSwitchScrambling failed: {response}")
+
+        await self._with_session(_do_call)
 
     async def set_lock(self, locked: bool) -> None:
         async def _do_call(session: _Session) -> None:

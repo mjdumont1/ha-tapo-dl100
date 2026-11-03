@@ -1,7 +1,7 @@
 """Constants for the Tapo DL100 integration."""
 
 DOMAIN = "tapo_dl100"
-PLATFORMS = ["lock", "sensor"]
+PLATFORMS = ["lock", "sensor", "binary_sensor", "switch", "number"]
 
 CONF_IP = "ip"
 CONF_CLOUD_USERNAME = "cloud_username"
